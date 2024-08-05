@@ -1,0 +1,6 @@
+[submodule "eigen"]
+	path = eigen
+	url = https://gitlab.com/libeigen/eigen
+[submodule "argparse"]
+	path = argparse
+	url = https://github.com/p-ranav/argparse
