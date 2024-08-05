@@ -6,11 +6,7 @@ This algorithm creates a piecewise linear approximation of a manifold of dimensi
 
 For comparison, we also provide implementations for the permutahedron-based tracing algorithm of Boissonnat et al. [1], and the Generalized Combinatorial Continuation Hypercubes [2].
 
-<p align="center">
-<video controls loop>
-<source src="sample.mp4" type="video/mp4">
-</video>
-</p>
+https://github.com/user-attachments/assets/ab187621-dc49-452d-ad52-46267e2ed2b4
 
 ## License
 
