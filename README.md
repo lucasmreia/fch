@@ -10,7 +10,7 @@ https://github.com/user-attachments/assets/ab187621-dc49-452d-ad52-46267e2ed2b4
 
 ## License
 
-The files of this repository are free to use as long as you cite, or give credit to, the original creators.
+The files in this repository are free to use as long as you cite, or give credit to, the original creators.
 
 ## Requirements
  - A C++ compiler with C++20 support (tested on GCC and Apple CLang).
