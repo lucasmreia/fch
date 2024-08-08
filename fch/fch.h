@@ -9,7 +9,7 @@
 #include "../common/utility.h"
 #include "../gcch/gch.h"
 
-// I have to do this check because then I do pdep with the label and I also use to_ullong().
+// I have to perform this check because I do pdep with the label, and I also use to_ullong().
 static_assert((2 * NDIM) < (sizeof(size_t) * 8));
 
 struct HFace {
