@@ -18,10 +18,13 @@
 #endif
 
 // #define PRINT_DEBUG
+#define PRECALCULATED_PERTURBATION
+#define PTA_DOOR_IN_DOOR_OUT
 
 // Error thresholds.
 constexpr double PERTURBATION_AMPLITUDE = 1e-8;    // amplitude of the perturbation applied to the vertices.
 constexpr double DIAGONAL_ZERO_THRESHOLD = 1e-11;  // threshold used to check if all diagonal elements of a matrix are zero.
+constexpr double LAMBDA_ZERO_THRESHOLD = 0;        // threshold used to check if all lambda are greater than zero.
 
 // Parameters.
 constexpr size_t NDIM = TestCaseImpl<TestCase::SELECTED_CASE>::NDIM;

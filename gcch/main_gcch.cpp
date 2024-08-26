@@ -12,15 +12,22 @@
 #include "../common/utility.h"
 #include "gch.h"
 
-void continuation(const std::string &filename) {
-    // calculate which n-hypercube the starting point belongs to.
-    std::array<size_t, NDIM> grid_coord = getFirstPointHypercubeCoord();
-    size_t g = coordToEnum(grid_coord, DOMAIN_GRID_BASIS);
+// use two unordered_sets, one for those that have yet to be processed and one for those that have already been processed.
+std::unordered_set<BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH>> to_be_processed;
+std::unordered_set<BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH>> already_processed;
 
-    // use two unordered_sets, one for those that have yet to be processed and one for those that have already been processed.
-    std::unordered_set<size_t> to_be_processed;
-    std::unordered_set<size_t> already_processed;
-    to_be_processed.insert(g);
+void addFirstPoint() {
+    // calculate which n-hypercube the starting point belongs to.
+    std::array<UINT_COORD, NDIM> grid_coord = getFirstPointHypercubeCoord();
+    BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> coord_bitset{};
+    coordToBitset(grid_coord, coord_bitset);
+
+    to_be_processed.insert(coord_bitset);
+}
+
+void continuation(const std::string &filename) {
+    std::array<UINT_COORD, NDIM> grid_coord{};
+    BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> coord_bitset{};
 
     // create output file and save header.
     size_t n_saved_hypercubes = 0;
@@ -30,26 +37,26 @@ void continuation(const std::string &filename) {
         throw std::runtime_error("ERROR OPENING FILE");
     }
 
-    std::array<std::array<double, NDIM>, (1ULL << NDIM)> vert_hypercube{};
+    std::vector<std::array<double, NDIM>> vert_hypercube((1ULL << NDIM));
     HypercubeApprox approx;
     Label2N neighbor_cells;
     bool valid;
 
     // while to_be_processed not empty, take a cube and process it.
     while (!to_be_processed.empty()) {
-        g = *to_be_processed.begin();
+        coord_bitset = *to_be_processed.begin();
         to_be_processed.erase(to_be_processed.begin());
 
         // add the current cube to those that have already been traversed.
-        already_processed.insert(g);
+        already_processed.insert(coord_bitset);
 
-        // convert the cube index to coordinates.
-        enumToCoord(g, DOMAIN_GRID_BASIS, grid_coord);
+        // convert to coordinates.
+        bitsetToCoord(coord_bitset, grid_coord);
         for (size_t j = 0; j < (1ULL << NDIM); ++j) {
             for (size_t i = 0; i < NDIM; ++i) {
-                vert_hypercube[j][i] = DOMAIN_MIN[i] + DOMAIN_RANGE[i] * static_cast<double>(grid_coord[i]);
+                vert_hypercube[j][i] = DOMAIN_MIN[i] + DOMAIN_STEP[i] * static_cast<double>(grid_coord[i]);
                 if (j & (1ULL << i)) {
-                    vert_hypercube[j][i] += DOMAIN_RANGE[i];
+                    vert_hypercube[j][i] += DOMAIN_STEP[i];
                 }
             }
             addPerturbationVertex(grid_coord, j, vert_hypercube[j]);
@@ -61,21 +68,25 @@ void continuation(const std::string &filename) {
         // save result of the gcmh.
         if (valid) {
             ++n_saved_hypercubes;
-            writeOutputHypercube(g, approx, fout);
+            writeOutputHypercube(n_saved_hypercubes, coord_bitset, approx, fout);
         }
 
         // for each neighbor marked, add it to the list of cubes that need to be traversed.
         for (size_t i = 0; i < (2 * NDIM); ++i) {
             if (neighbor_cells[i]) {
-                if ((i < NDIM) && (g >= DOMAIN_GRID_BASIS[i])) {
-                    const size_t ng = g - DOMAIN_GRID_BASIS[i];
-                    if (!already_processed.contains(ng)) {
-                        to_be_processed.insert(ng);
+                if ((i < NDIM) && (grid_coord[i] > 0)) {
+                    std::array<UINT_COORD, NDIM> ngrid_coord = grid_coord;
+                    ngrid_coord[i] -= 1;
+                    coordToBitset(ngrid_coord, coord_bitset);
+                    if (!already_processed.contains(coord_bitset)) {
+                        to_be_processed.insert(coord_bitset);
                     }
-                } else if ((i >= NDIM) && ((g + DOMAIN_GRID_BASIS[i % NDIM]) < DOMAIN_GRID_BASIS[NDIM])) {
-                    const size_t ng = g + DOMAIN_GRID_BASIS[i % NDIM];
-                    if (!already_processed.contains(ng)) {
-                        to_be_processed.insert(ng);
+                } else if ((i >= NDIM) && (grid_coord[i % NDIM] < (DOMAIN_DIV[i % NDIM] - 1))) {
+                    std::array<UINT_COORD, NDIM> ngrid_coord = grid_coord;
+                    ngrid_coord[i % NDIM] += 1;
+                    coordToBitset(ngrid_coord, coord_bitset);
+                    if (!already_processed.contains(coord_bitset)) {
+                        to_be_processed.insert(coord_bitset);
                     }
                 }
             }
@@ -124,6 +135,8 @@ int main(int argc, char *argv[]) {
         std::cout << "Verbosity enabled." << std::endl;
         std::cout << "Output file: " << output_path << std::endl;
     }
+
+    addFirstPoint();
 
     const auto t0 = std::chrono::high_resolution_clock::now();
     continuation(output_path);

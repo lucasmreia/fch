@@ -10,8 +10,19 @@
 #include <cstdio>
 #include <limits>
 #include <random>
+#include <type_traits>
+#include <typeinfo>
 
 #include "definitions.h"
+
+// Limiting the dimension of the domain.
+// In all methods, it must be able to address all 2^NDIM vertices of a hypercube.
+// This cannot exceed the maximum size of size_t.
+// The amount of RAM will run out well before that.
+// In the PTA, it must be able to do ((1ULL << (NDIM + 1)) - 1) to create the last vector.
+// I sum 2 because if I shift by (NDIM + 1) there has to be two extra bits at the end.
+// So (NDIM + 2) must be within the amount of bits available.
+static_assert((NDIM + 2) < (sizeof(size_t) * 8));
 
 constexpr bool checkFirstPoint() {
     // if the initial cube is out of range, throw exception.
@@ -22,97 +33,68 @@ constexpr bool checkFirstPoint() {
     }
     return true;
 }
-
 static_assert(checkFirstPoint(), "first point out of range");
-
-constexpr bool checkDomainDiv() {
-    // if size_t can't store the grid size, it throws an exception.
-    size_t aux = std::numeric_limits<size_t>::max();
-    aux /= DOMAIN_DIV[0];
-    for (size_t i = 1; i < NDIM; ++i) {
-        if (aux < DOMAIN_DIV[i]) {
-            return false;
-        }
-        aux /= DOMAIN_DIV[i];
-    }
-    return true;
-}
-
-static_assert(checkDomainDiv(), "domain has too many divisions");
 
 // Dimension of the manifold.
 constexpr size_t MDIM = NDIM - KDIM;
 
 // Cell length at a given dimension (step).
-constexpr std::array<double, NDIM> createDomainRange() {
-    std::array<double, NDIM> range{};
+constexpr std::array<double, NDIM> createDomainStep() {
+    std::array<double, NDIM> step{};
     for (size_t i = 0; i < NDIM; ++i) {
-        range[i] = (DOMAIN_MAX[i] - DOMAIN_MIN[i]) / static_cast<double>(DOMAIN_DIV[i]);
+        step[i] = (DOMAIN_MAX[i] - DOMAIN_MIN[i]) / static_cast<double>(DOMAIN_DIV[i]);
     }
-    return range;
+    return step;
 }
+constexpr std::array<double, NDIM> DOMAIN_STEP = createDomainStep();
 
-constexpr std::array<double, NDIM> DOMAIN_RANGE = createDomainRange();
-
-// considering only the inner part of the grid.
-constexpr std::array<size_t, NDIM + 1> createDomainGridBasis() {
-    std::array<size_t, NDIM + 1> basis{};
-    basis[0] = 1;
-    for (size_t i = 1; i <= NDIM; ++i) {
-        basis[i] = basis[i - 1] * DOMAIN_DIV[i - 1];
+// Required bit width for the divisions of each coordinate of the domain.
+constexpr std::array<size_t, NDIM> createDomainDivBitWidth() {
+    std::array<size_t, NDIM> bit_width{};
+    for (size_t i = 0; i < NDIM; ++i) {
+        bit_width[i] = std::bit_width(DOMAIN_DIV[i]);
     }
-    return basis;
+    return bit_width;
 }
+constexpr std::array<size_t, NDIM> DOMAIN_DIV_BIT_WIDTH = createDomainDivBitWidth();
 
-constexpr std::array<size_t, NDIM + 1> DOMAIN_GRID_BASIS = createDomainGridBasis();
-constexpr size_t BIT_WIDTH_GRID_ENUM = std::bit_width(DOMAIN_GRID_BASIS[NDIM]);
-
-// considering that the grid has 1 extra point at the end of each dimension (outer boundary).
-constexpr std::array<size_t, NDIM + 1> createDomainGridBasis1() {
-    std::array<size_t, NDIM + 1> basis{};
-    basis[0] = 1;
-    for (size_t i = 1; i <= NDIM; ++i) {
-        basis[i] = basis[i - 1] * (DOMAIN_DIV[i - 1] + 1);
+// Total required bit width for the divisions of the domain.
+constexpr size_t createDomainDivTotalBitWidth() {
+    size_t total_bit_width = 0;
+    for (size_t i = 0; i < NDIM; ++i) {
+        total_bit_width += DOMAIN_DIV_BIT_WIDTH[i];
     }
-    return basis;
+    return total_bit_width;
 }
+constexpr size_t DOMAIN_DIV_TOTAL_BIT_WIDTH = createDomainDivTotalBitWidth();
 
-constexpr std::array<size_t, NDIM + 1> DOMAIN_GRID_BASIS1 = createDomainGridBasis1();
-constexpr size_t BIT_WIDTH_GRID1_ENUM = std::bit_width(DOMAIN_GRID_BASIS1[NDIM]);
-
-template <size_t SIZE>
-size_t coordToEnum(const size_t *coord, const size_t *basis) {
-    size_t enm = 0;
-    for (size_t i = 0; i < SIZE; ++i) {
-        enm += coord[i] * basis[i];
+// Max required bit width for one of the divisions of the domain.
+constexpr size_t createDomainDivMaxBitWidth() {
+    size_t max_bit_width = 0;
+    for (size_t i = 0; i < NDIM; ++i) {
+        max_bit_width = std::max(max_bit_width, DOMAIN_DIV_BIT_WIDTH[i]);
     }
-    return enm;
+    return max_bit_width;
 }
+constexpr size_t DOMAIN_DIV_MAX_BIT_WIDTH = createDomainDivMaxBitWidth();
 
-template <size_t SIZE>
-size_t coordToEnum(const std::array<size_t, SIZE> &coord, const std::array<size_t, SIZE + 1> &basis) {
-    return coordToEnum<SIZE>(coord.data(), basis.data());
-}
+// Required bit width for the index of each vector of the inductive notation.
+constexpr size_t INDUCTIVE_INDEX_BIT_WIDTH = std::bit_width(NDIM - 1);
 
-template <size_t SIZE>
-void enumToCoord(const size_t enm, const size_t *basis, size_t *coord) {
-    size_t aux = enm;
-    for (size_t i = 0; i < SIZE; ++i) {
-        coord[SIZE - 1 - i] = aux / basis[SIZE - 1 - i];
-        aux %= basis[SIZE - 1 - i];
-    }
-}
+// Integer type used by the coords.
+using UINT_COORD = std::conditional<(DOMAIN_DIV_MAX_BIT_WIDTH > 32), uint64_t, std::conditional<(DOMAIN_DIV_MAX_BIT_WIDTH > 16), uint32_t, std::conditional<(DOMAIN_DIV_MAX_BIT_WIDTH > 8), uint16_t, uint8_t>::type>::type>::type;
 
-template <size_t SIZE>
-void enumToCoord(const size_t enm, const std::array<size_t, SIZE + 1> &basis, std::array<size_t, SIZE> &coord) {
-    enumToCoord<SIZE>(enm, basis.data(), coord.data());
-}
+// Integer type used by the vector indices.
+using UINT_EIDX = std::conditional<(INDUCTIVE_INDEX_BIT_WIDTH > 32), uint64_t, std::conditional<(INDUCTIVE_INDEX_BIT_WIDTH > 16), uint32_t, std::conditional<(INDUCTIVE_INDEX_BIT_WIDTH > 8), uint16_t, uint8_t>::type>::type>::type;
+
+// Integer type used by the vectors in binary format.
+using UINT_EBIN = std::conditional<((NDIM + 1) > 32), uint64_t, std::conditional<((NDIM + 1) > 16), uint32_t, std::conditional<((NDIM + 1) > 8), uint16_t, uint8_t>::type>::type>::type;
 
 // calculate which cube the first point belongs to.
-constexpr std::array<size_t, NDIM> getFirstPointHypercubeCoord() {
-    std::array<size_t, NDIM> grid_coord{};
+constexpr std::array<UINT_COORD, NDIM> getFirstPointHypercubeCoord() {
+    std::array<UINT_COORD, NDIM> grid_coord{};
     for (size_t i = 0; i < NDIM; ++i) {
-        grid_coord[i] = static_cast<size_t>(std::max(0., FIRST_POINT[i] - DOMAIN_MIN[i]) / DOMAIN_RANGE[i]);
+        grid_coord[i] = static_cast<UINT_COORD>(std::max(0., FIRST_POINT[i] - DOMAIN_MIN[i]) / DOMAIN_STEP[i]);
     }
     return grid_coord;
 }
@@ -175,8 +157,13 @@ struct hash<BitLabel<BIT_SIZE>> {
 };
 }  // namespace std
 
+// Functions to convert bitset to/from coord.
+void coordToBitset(const std::array<UINT_COORD, NDIM> &coord, BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> &b);
+
+void bitsetToCoord(const BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> &b, std::array<UINT_COORD, NDIM> &coord);
+
 // Function to add random perturbation to a vertex of the grid.
-void addPerturbationVertex(const std::array<size_t, NDIM> &grid_coord, size_t local_idx,
+void addPerturbationVertex(const std::array<UINT_COORD, NDIM> &grid_coord, size_t local_idx,
                            std::array<double, NDIM> &vertex);
 
 // Oracle to check if k-simples crosses the manifold, and compute the manifold intersecrtion vertex.

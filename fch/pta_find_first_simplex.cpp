@@ -3,6 +3,8 @@
 // Original source: https://github.com/lucasmreia/fch
 ///////////////////////////////////
 
+#include "pta_find_first_simplex.h"
+
 #include <Eigen/Dense>
 #include <algorithm>
 #include <argparse/argparse.hpp>
@@ -13,15 +15,13 @@
 #include <unordered_set>
 
 #include "../common/bmi2.h"
-#include "permutahedron.h"
-
-std::unordered_set<BitsetPermutahedronSFace> faces_to_be_processed;
-std::unordered_set<BitsetPermutahedronSFace> faces_already_processed;
-
-size_t n_saved_simplices = 0;
+#include "../pta/permutahedron.h"
 
 #ifndef PTA_DOOR_IN_DOOR_OUT
-void createFacesFromCoface(const SCoface &coface, FILE *fout) {
+bool createFacesFromCoface(std::unordered_set<BitsetPermutahedronSFace> &faces_to_be_processed,
+                           std::unordered_set<BitsetPermutahedronSFace> &faces_already_processed,
+                           const SCoface &coface,
+                           CanonicalSimplex<KDIM> &found_simplex) {
     // print_coface(coface);
     SFace face;
     BitsetPermutahedronSFace bitset_face;
@@ -56,11 +56,17 @@ void createFacesFromCoface(const SCoface &coface, FILE *fout) {
                 if (contains_manifold) {
                     faces_to_be_processed.insert(bitset_face);
                     faces_already_processed.insert(bitset_face);
-                    // save vertex to file.
-                    ++n_saved_simplices;
-                    fwrite(&n_saved_simplices, sizeof(size_t), 1, fout);
-                    bitset_face.write(fout);
-                    fwrite(mf_vertex.data(), sizeof(double), NDIM, fout);
+                    // returning the simplex found if it is aligned with the grid.
+                    if (std::popcount(face.e[KDIM]) == (NDIM + 1 - KDIM)) {
+                        found_simplex.grid_coord = face.grid_coord;
+                        for (size_t ii = 0; ii < KDIM; ++ii) {
+                            if (std::popcount(face.e[ii]) != 1) {
+                                throw std::runtime_error("std::popcount(face.e[ii]) must be 1");
+                            }
+                            found_simplex.e_idx[ii] = std::countr_zero(face.e[ii]);
+                        }
+                        return true;
+                    }
                 }
             }
         }
@@ -69,7 +75,7 @@ void createFacesFromCoface(const SCoface &coface, FILE *fout) {
     // I have to change the reference vertex: advance 1 vector.
     face.grid_coord = coface.grid_coord;
     for (size_t j = 0; j < NDIM; ++j) {   // coface.grid += face.e[0], only considers canonical notation.
-        if (coface.e[0] & (1ULL << j)) {  // e0 will never have the negative (e_n).
+        if (coface.e[0] & (1ULL << j)) {  // e[0] will never have the negative vector (e_n).
             ++face.grid_coord[j];
         }
     }
@@ -93,17 +99,27 @@ void createFacesFromCoface(const SCoface &coface, FILE *fout) {
             if (contains_manifold) {
                 faces_to_be_processed.insert(bitset_face);
                 faces_already_processed.insert(bitset_face);
-                // save vertex to file.
-                ++n_saved_simplices;
-                fwrite(&n_saved_simplices, sizeof(size_t), 1, fout);
-                bitset_face.write(fout);
-                fwrite(mf_vertex.data(), sizeof(double), NDIM, fout);
+                // returning the simplex found if it is aligned with the grid.
+                if (std::popcount(face.e[KDIM]) == (NDIM + 1 - KDIM)) {
+                    found_simplex.grid_coord = face.grid_coord;
+                    for (size_t ii = 0; ii < KDIM; ++ii) {
+                        if (std::popcount(face.e[ii]) != 1) {
+                            throw std::runtime_error("std::popcount(face.e[ii]) must be 1");
+                        }
+                        found_simplex.e_idx[ii] = std::countr_zero(face.e[ii]);
+                    }
+                    return true;
+                }
             }
         }
     }
+    return false;
 }
 
-void createCofacesFromFace(const SFace &face, FILE *fout) {
+bool createCofacesFromFace(std::unordered_set<BitsetPermutahedronSFace> &faces_to_be_processed,
+                           std::unordered_set<BitsetPermutahedronSFace> &faces_already_processed,
+                           const SFace &face,
+                           CanonicalSimplex<KDIM> &found_simplex) {
     // print_face(face);
     SCoface coface, coface_canonical;
     coface.grid_coord = face.grid_coord;
@@ -134,16 +150,25 @@ void createCofacesFromFace(const SFace &face, FILE *fout) {
                 }
                 //--
                 if (isSCofaceInsideGrid(coface_canonical)) {
-                    createFacesFromCoface(coface_canonical, fout);
+                    if (createFacesFromCoface(faces_to_be_processed,
+                                              faces_already_processed,
+                                              coface_canonical,
+                                              found_simplex)) {
+                        return true;
+                    }
                 }
             }
             coface.e[idx] = face.e[i];  // now just assign this one to split the next ones.
             ++idx;
         }
     }
+    return false;
 }
 #else
-void traverseCofacesFromFace(const SFace &in_face, FILE *fout) {
+bool traverseCofacesFromFace(std::unordered_set<BitsetPermutahedronSFace> &faces_to_be_processed,
+                             std::unordered_set<BitsetPermutahedronSFace> &faces_already_processed,
+                             const SFace &in_face,
+                             CanonicalSimplex<KDIM> &found_simplex) {
     // print_face(face);
     SCoface coface, coface_canonical;
     coface.grid_coord = in_face.grid_coord;
@@ -341,17 +366,20 @@ void traverseCofacesFromFace(const SFace &in_face, FILE *fout) {
                                 throw std::runtime_error("door-in,door-out could not find output k-simplex");
                             }
 
-                            // calculating the approximated position of the point where manifold intersects the simplex.
-                            center = V * lambda;
-
                             // add simplex to already processed/to be processed.
                             faces_to_be_processed.insert(out_bitset_face);
                             faces_already_processed.insert(out_bitset_face);
-                            // save vertex to file.
-                            ++n_saved_simplices;
-                            fwrite(&n_saved_simplices, sizeof(size_t), 1, fout);
-                            out_bitset_face.write(fout);
-                            fwrite(mf_vertex.data(), sizeof(double), NDIM, fout);
+                            // returning the simplex found if it is aligned with the grid.
+                            if (std::popcount(out_face.e[KDIM]) == (NDIM + 1 - KDIM)) {
+                                found_simplex.grid_coord = out_face.grid_coord;
+                                for (size_t ii = 0; ii < KDIM; ++ii) {
+                                    if (std::popcount(out_face.e[ii]) != 1) {
+                                        throw std::runtime_error("std::popcount(face.e[ii]) must be 1");
+                                    }
+                                    found_simplex.e_idx[ii] = std::countr_zero(out_face.e[ii]);
+                                }
+                                return true;
+                            }
                         }
                     }
                 }
@@ -360,10 +388,12 @@ void traverseCofacesFromFace(const SFace &in_face, FILE *fout) {
             ++idx;
         }
     }
+    return false;
 }
 #endif
 
-void addFirstPoint() {
+void addFirstPoint(std::unordered_set<BitsetPermutahedronSFace> &faces_to_be_processed,
+                   std::unordered_set<BitsetPermutahedronSFace> &faces_already_processed) {
     // calculate which n-hypercube the first point belongs to.
     constexpr std::array<UINT_COORD, NDIM> GRID = getFirstPointHypercubeCoord();
 
@@ -477,16 +507,14 @@ void addFirstPoint() {
     }
 }
 
-void continuation_pta(const std::string &filename) {
-    FILE *fout = fopen(filename.c_str(), "wb");
-    if (fout == nullptr) {
-        throw std::runtime_error("ERROR OPENING FILE");
-    }
+bool find_first_simplex(CanonicalSimplex<KDIM> &found_simplex) {
+    std::unordered_set<BitsetPermutahedronSFace> faces_to_be_processed;
+    std::unordered_set<BitsetPermutahedronSFace> faces_already_processed;
+
+    addFirstPoint(faces_to_be_processed, faces_already_processed);
 
     BitsetPermutahedronSFace bitset_face;
     SFace face;
-
-    std::cout << faces_to_be_processed.size() << std::endl;
 
     while (!faces_to_be_processed.empty()) {
         bitset_face = *faces_to_be_processed.begin();
@@ -498,63 +526,20 @@ void continuation_pta(const std::string &filename) {
         // calculate the cofaces.
         // then, for each coface, calculate the faces.
 #ifndef PTA_DOOR_IN_DOOR_OUT
-        createCofacesFromFace(face, fout);
+        if (createCofacesFromFace(faces_to_be_processed,
+                                  faces_already_processed,
+                                  face,
+                                  found_simplex)) {
+            return true;
+        }
 #else
-        traverseCofacesFromFace(face, fout);
+        if (traverseCofacesFromFace(faces_to_be_processed,
+                                    faces_already_processed,
+                                    face,
+                                    found_simplex)) {
+            return true;
+        }
 #endif
     }
-
-    // close output file.
-    {
-        constexpr size_t EOF_FLAG = std::numeric_limits<size_t>::max();
-        fwrite(&EOF_FLAG, sizeof(size_t), 1, fout);
-    }
-    fclose(fout);
-    fout = nullptr;
-
-    std::cout << n_saved_simplices << " simplices generated" << std::endl;
-}
-
-int main(int argc, char *argv[]) {
-    // specifying the input arguments.
-    argparse::ArgumentParser program("pta", "", argparse::default_arguments::help);
-    program.add_description(
-        "This program executes the manifold tracing algorithm based on the permutahedral representation.");
-    program.set_usage_max_line_width(80);
-    program.add_usage_newline();
-    program.add_argument("-o", "--output")
-        .default_value("out_pta.bin")
-        .required()
-        .help("specify the output .bin file.");
-    program.add_argument("--verbose")
-        .help("prints more information in the terminal while the program runs.")
-        .default_value(false)
-        .implicit_value(true);
-
-    // reading the input arguments.
-    try {
-        program.parse_args(argc, argv);
-    } catch (const std::exception &err) {
-        std::cerr << err.what() << std::endl;
-        std::cerr << program << std::endl;
-        return -1;
-    }
-
-    const std::string output_path = program.get<std::string>("--output");
-
-    if (program["--verbose"] == true) {
-        std::cout << "Verbosity enabled." << std::endl;
-        std::cout << "Output file: " << output_path << std::endl;
-    }
-
-    addFirstPoint();
-
-    const auto t0 = std::chrono::high_resolution_clock::now();
-    continuation_pta(output_path);
-    const auto t1 = std::chrono::high_resolution_clock::now();
-
-    std::cout << "Time to generate bin (PTA): " << std::chrono::duration<double>(t1 - t0).count()
-              << std::endl;
-
-    return 0;
+    return false;
 }

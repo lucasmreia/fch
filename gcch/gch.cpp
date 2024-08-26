@@ -10,10 +10,179 @@
 #include <unordered_map>
 #include <unordered_set>
 
+template <size_t DIM>
+void vertLabelsToInductive(const std::array<size_t, DIM + 1> &vert_labels,
+                           std::array<UINT_EIDX, DIM> &e_idx) {
+    for (size_t i = 0; i < DIM; ++i) {
+        e_idx[i] = std::countr_zero(vert_labels[i + 1] - vert_labels[i]);
+    }
+}
+
+template <size_t DIM>
+void inductiveToVertLabels(const size_t first_vert_label,
+                           const std::array<UINT_EIDX, DIM> &e_idx,
+                           std::array<size_t, DIM + 1> &vert_labels) {
+    vert_labels[0] = first_vert_label;
+    for (size_t i = 1; i <= DIM; ++i) {
+        vert_labels[i] = vert_labels[i - 1] | (1ULL << e_idx[i - 1]);
+    }
+}
+
+// based on the hypercube face label and the direction of the coface, inserts a vertex in the dim-simplex
+// to make it a (dim+1)-simplex.
+// returns the index, within the (dim+1)-simplex, of the new vertex added to the dim-simplex (either 0 or DIM+1).
+// within the (k+1)-hypercube there is only one (k+1)-simplex that contains the k-simplex within the hypercube k-face.
+template <size_t DIM>
+size_t elevateDimension(const Label2N &in_hface_label, const std::array<UINT_EIDX, DIM> &in_e_idx,
+                        const size_t unset_bit_idx,
+                        Label2N &out_hface_label, std::array<UINT_EIDX, DIM + 1> &out_e_idx) {
+    out_hface_label = in_hface_label;
+    out_hface_label.reset(unset_bit_idx);
+    const size_t unset_coord = unset_bit_idx % NDIM;
+    if (unset_bit_idx < NDIM) {
+        std::memcpy(out_e_idx.data(), in_e_idx.data(), DIM * sizeof(UINT_EIDX));
+        out_e_idx[DIM] = unset_coord;
+        return (DIM + 1);  // last vertex of the (k+1)-simplex.
+        // NOTE: IT'S THE POSITION OF THE LAST VERTEX, NOT THE LAST e_idx, SO IT'S +1.
+    } else {
+        out_e_idx[0] = unset_coord;
+        std::memcpy(&out_e_idx[1], in_e_idx.data(), DIM * sizeof(UINT_EIDX));
+        return 0;  // first vertex of the (k+1)-simplex.
+    }
+}
+
+// Get the index of the column that has to be replaced.
+// I already pass lu_decomp and lambda to reuse those values.
+template <size_t DIM>
+int64_t getReplacedColumnIdx(const Eigen::PartialPivLU<Eigen::Matrix<double, DIM, DIM>> &lu_decomp,
+                             const Eigen::Vector<double, DIM + 1> &lambda,
+                             const Eigen::Vector<double, DIM> &b_mu) {
+    // solve the system to calculate mu.
+    Eigen::Vector<double, DIM + 1> mu = Eigen::Vector<double, DIM + 1>::Zero();
+    mu.tail(DIM) = lu_decomp.solve(b_mu);
+    mu(0) = 1. - mu.sum();
+
+    // calcualte min{lambda/mu} and the index of the vertex that must be replaced.
+    double min_lambda_mu = 0;
+    int64_t idx_k = -1;
+    for (int64_t ii = 0; ii < (DIM + 1); ++ii) {
+        if (mu(ii) > 0 && ((idx_k < 0) || (min_lambda_mu > lambda(ii) / mu(ii)))) {
+            idx_k = ii;
+            min_lambda_mu = lambda(ii) / mu(ii);
+        }
+    }
+    //-- error check.
+    if (idx_k < 0) {
+        std::cout << "error idx_k: " << idx_k << std::endl;
+        throw std::runtime_error("idx_k must be >= 0");
+    }
+    //--
+    return idx_k;
+}
+
+// vertices, Vert_simplex_k_1 and extra_vertex_idx are progressively being modified as you pivot.
+template <size_t DIM>
+void traverseHCofaceHypercube(const std::vector<std::array<double, NDIM>> &vert_hcube,
+                              std::array<size_t, DIM + 2> &vert_labels_hc,
+                              size_t &extra_vertex_idx) {
+    // keep solving the system and pivoting until you find the output simplex.
+    // create the system.
+    Eigen::Matrix<double, DIM, DIM> A{};
+    Eigen::Matrix<double, NDIM, DIM + 1> V{};
+    std::array<size_t, DIM + 1> columns{};  // label of the vertex assigned to each column.
+
+    Eigen::Vector<double, DIM> b_lambda{};
+
+    // calculating the positions of the vertices and evalVertices.
+    // creating the matrices of the A*x=b system.
+    for (int64_t j = 0, v_idx = 0; j < (DIM + 1); ++j, ++v_idx) {
+        if (v_idx == extra_vertex_idx) {
+            ++v_idx;
+        }
+        columns[j] = v_idx;
+        std::memcpy(&V(0, j), vert_hcube[vert_labels_hc[v_idx]].data(), NDIM * sizeof(double));
+        if (j == 0) {
+            func(vert_hcube[vert_labels_hc[v_idx]].data(), b_lambda.data());
+            b_lambda *= -1;
+        } else {
+            func(vert_hcube[vert_labels_hc[v_idx]].data(), &A(0, j - 1));
+            A.col(j - 1) += b_lambda;
+        }
+    }
+
+    // assigning b_mu.
+    Eigen::Vector<double, DIM> b_mu{};
+    func(vert_hcube[vert_labels_hc[extra_vertex_idx]].data(), b_mu.data());
+    b_mu += b_lambda;
+
+    // variables to solve the system.
+    Eigen::Vector<double, DIM + 1> lambda{};
+    Eigen::PartialPivLU<Eigen::Matrix<double, DIM, DIM>> lu_decomp;
+
+    while (true) {
+        // solve the system to calculate lambda.
+        lu_decomp = A.partialPivLu();
+        lambda(0) = 0;
+        lambda.tail(KDIM) = lu_decomp.solve(b_lambda);
+        lambda(0) = 1. - lambda.sum();
+
+        if (!(lambda.minCoeff() >= LAMBDA_ZERO_THRESHOLD)) {
+            throw std::runtime_error("door-in,door-out could not find output k-simplex");
+        }
+
+        const int64_t replaced_column_idx = getReplacedColumnIdx<DIM>(lu_decomp, lambda, b_mu);
+
+        // replace the column with the extra_vertex_idx.
+        std::swap(columns[replaced_column_idx], extra_vertex_idx);
+
+        // pivoting the k+1 simplex on extra_vertex_idx to find the new extra vertex.
+        // however, if it wants to pivot on the first or the last vertex of the (k+1)-simplex, if means the manifold
+        // has left the (k+1)-hypercube, so the traversal ends.
+        if ((extra_vertex_idx == 0) || (extra_vertex_idx == (DIM + 1))) {
+            // end of the traversal inside the coface.
+            // vert_labels_hc[columns] already has the vertex labels used by the output k-simplex.
+            // only return.
+            return;
+        }
+
+        // updating the column with the new vertex.
+        std::memcpy(&V(0, replaced_column_idx), vert_hcube[vert_labels_hc[columns[replaced_column_idx]]].data(),
+                    NDIM * sizeof(double));
+
+        // updating the system of equations.
+        if (replaced_column_idx > 0) {
+            // if it is not the first vertex, just update the replaced column.
+            func(vert_hcube[vert_labels_hc[columns[replaced_column_idx]]].data(), &A(0, replaced_column_idx - 1));
+            A.col(replaced_column_idx - 1) += b_lambda;
+        } else {
+            // if it is the first vertex, recreate all matrices.
+            func(&V(0, 0), b_lambda.data());
+            b_lambda *= -1;
+            for (int64_t j = 1; j < (KDIM + 1); ++j) {
+                func(&V(0, j), &A(0, j - 1));  // eigen has to be column major for this to work. check it.
+                A.col(j - 1) += b_lambda;
+            }
+        }
+
+        // pivoting the k+1 simplex on extra_vertex_idx to find the new extra vertex.
+        const size_t previous_v_idx = extra_vertex_idx - 1;
+        const size_t next_v_idx = extra_vertex_idx + 1;
+        const size_t dif_e = vert_labels_hc[next_v_idx] - vert_labels_hc[previous_v_idx];
+        const size_t pivoted_v_label = vert_labels_hc[extra_vertex_idx] ^ dif_e;
+
+        // assign a new pivoted vertex.
+        vert_labels_hc[extra_vertex_idx] = pivoted_v_label;
+
+        // updating b_mu with the new pivoted vertex.
+        func(vert_hcube[vert_labels_hc[extra_vertex_idx]].data(), b_mu.data());
+        b_mu += b_lambda;
+    }
+}
+
 // loops through all k-simplices that make a hypercube k-face, and checks each simplex for intersection with the manifold.
 void genVerticesFromFace(const std::array<bool, NDIM> &hface_fixed_coord,
                          const Label2N &hface_label,
-                         const std::array<std::array<double, NDIM>, (1ULL << NDIM)> &vert_hcube,
+                         const std::vector<std::array<double, NDIM>> &vert_hcube,
                          std::vector<std::array<double, NDIM>> &mf_vertices,
                          std::vector<std::array<size_t, KDIM + 1>> &mf_vert_labels,
                          std::vector<Label2N> &mf_hface_labels) {
@@ -93,7 +262,7 @@ void genVerticesFromFace(const std::array<bool, NDIM> &hface_fixed_coord,
 }
 
 // loops through all k-faces of an n-hypercube.
-void genManifoldVertices(const std::array<std::array<double, NDIM>, (1ULL << NDIM)> &vert_hcube,
+void genManifoldVertices(const std::vector<std::array<double, NDIM>> &vert_hcube,
                          std::vector<std::array<double, NDIM>> &mf_vertices,
                          std::vector<std::array<size_t, KDIM + 1>> &mf_vert_labels,
                          std::vector<Label2N> &mf_hface_labels) {
@@ -214,7 +383,7 @@ void genEdges(const size_t dim,
     }
 }
 
-bool gch(const std::array<std::array<double, NDIM>, (1ULL << NDIM)> &vert_hcube,
+bool gch(const std::vector<std::array<double, NDIM>> &vert_hcube,
          HypercubeApprox &approx, Label2N &neighbor_cells) {
     approx.reset();
     neighbor_cells.reset();
@@ -262,8 +431,8 @@ bool gch(const std::array<std::array<double, NDIM>, (1ULL << NDIM)> &vert_hcube,
             const Label2N &hcoface_label{ edge_hface_labels_aux[i] };
 
             std::vector<std::array<size_t, 2>> new_edge_connections;
-            std::array<size_t, KDIM> hface_e_idx_in{};
-            std::array<size_t, KDIM + 1> hcoface_e_idx{};
+            std::array<UINT_EIDX, KDIM> hface_e_idx_in{};
+            std::array<UINT_EIDX, KDIM + 1> hcoface_e_idx{};
             std::array<size_t, KDIM + 2> hcoface_vertex_labels{};
             std::array<size_t, KDIM + 1> hface_vertex_labels_out{};
             Label2N label_aux;
@@ -334,9 +503,13 @@ bool gch(const std::array<std::array<double, NDIM>, (1ULL << NDIM)> &vert_hcube,
     return true;
 }
 
-void writeOutputHypercube(const size_t g, const HypercubeApprox &approx, FILE *fout) {
-    // saving the hypercube position.
+void writeOutputHypercube(const size_t g,
+                          const BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> &bitset_coord,
+                          const HypercubeApprox &approx, FILE *fout) {
+    // saving the hypercube number.
     fwrite(&g, sizeof(size_t), 1, fout);
+    // saving the hypercube position.
+    bitset_coord.write(fout);
     // saving the number of vertices found in the hypercube k-faces.
     {
         const size_t nv = approx.vertex_labels.size();
@@ -361,8 +534,12 @@ void writeOutputHypercube(const size_t g, const HypercubeApprox &approx, FILE *f
     }
 }
 
-void readOutputHypercube(FILE *fin, HypercubeApprox &approx) {
+void readOutputHypercube(FILE *fin,
+                         BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> &bitset_coord,
+                         HypercubeApprox &approx) {
     approx.reset();
+    // reading the coord of the hypercube.
+    bitset_coord.read(fin);
     // reading the number of vertices found in the hypercube k-faces.
     size_t nv;
     fread(&nv, sizeof(size_t), 1, fin);

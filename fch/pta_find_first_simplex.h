@@ -5,13 +5,8 @@
 
 #pragma once
 
-enum class TestCase {
-    KLEIN_5TO3,
-    HYPERSHPERE_5TO1,
-    CIRCLE_9TO8,
-    HYPERSHPERE_N_TO_K,
-    S1_K_TIMES,
-};
+#include "../common/definitions.h"
+#include "../common/utility.h"
+#include "fch.h"
 
-template <TestCase CASE>
-struct TestCaseImpl;
+bool find_first_simplex(CanonicalSimplex<KDIM> &found_simplex);

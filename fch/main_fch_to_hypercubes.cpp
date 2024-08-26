@@ -12,22 +12,23 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../common/bmi2.h"
+// #include "../common/bmi2.h"
+#include "../gcch/gch.h"
 #include "fch.h"
 
 struct Edge {
-    std::array<size_t, NDIM> hcoface_grid_coord{};
+    std::array<UINT_COORD, NDIM> hcoface_grid_coord{};
     Label2N hcoface_label;
-    std::array<size_t, NDIM> hface_grid_coord_in{};
+    std::array<UINT_COORD, NDIM> hface_grid_coord_in{};
     std::array<size_t, KDIM + 1> simplex_vert_label_in{};
     std::array<double, NDIM> mf_vert_in{};
-    std::array<size_t, NDIM> hface_grid_coord_out{};
+    std::array<UINT_COORD, NDIM> hface_grid_coord_out{};
     std::array<size_t, KDIM + 1> simplex_vert_label_out{};
     std::array<double, NDIM> mf_vert_out{};
 };
 
-std::vector<Edge> edges;                                 // list of all calculated simplices.
-std::unordered_map<size_t, std::vector<size_t>> hcubes;  // marking the indices of the simplices that belong to each cube.
+std::vector<Edge> edges;                                                               // list of all calculated simplices.
+std::unordered_map<BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH>, std::vector<size_t>> hcubes;  // marking the indices of the simplices that belong to each cube.
 
 int main(int argc, char *argv[]) {
     // specifying the input arguments.
@@ -82,31 +83,56 @@ int main(int argc, char *argv[]) {
 
     while (true) {
         // reading the hypercube position.
-        size_t hcoface_g, hface_g_in, hface_g_out;
-        fread(&hcoface_g, sizeof(uint64_t), 1, fin);
+        size_t g;
+        fread(&g, sizeof(uint64_t), 1, fin);
 
         // checking if it is eof.
-        if (hcoface_g == EOF_FLAG) {
+        if (g == EOF_FLAG) {
             break;
         }
 
         ++n_read_cells;
 
+        // reading the parameters of the edge.
         Edge edge;
-        enumToCoord(hcoface_g, DOMAIN_GRID_BASIS, edge.hcoface_grid_coord);
 
-        // reading the other parameters of the edge.
-        readOutputCell(fin,
-                       edge.hcoface_label,
-                       hface_g_in,
-                       edge.simplex_vert_label_in,
-                       edge.mf_vert_in,
-                       hface_g_out,
-                       edge.simplex_vert_label_out,
-                       edge.mf_vert_out);
+        {
+            BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> bitset_coord;
+            CanonicalFaceLabel hcoface_label;
+            BitsetSimplex<KDIM> bitset_simplex_in;
+            std::array<double, NDIM> mf_vert_in{};
+            BitsetSimplex<KDIM> bitset_simplex_out;
+            std::array<double, NDIM> mf_vert_out{};
 
-        enumToCoord(hface_g_in, DOMAIN_GRID_BASIS, edge.hface_grid_coord_in);
-        enumToCoord(hface_g_out, DOMAIN_GRID_BASIS, edge.hface_grid_coord_out);
+            CanonicalSimplex<KDIM> tau_in{}, tau_out{};
+            CanonicalSimplex<KDIM + 1> sigma_in{}, sigma_out{};
+
+            readOutputCell(fin,
+                           bitset_coord,
+                           hcoface_label,
+                           bitset_simplex_in,
+                           edge.mf_vert_in,
+                           bitset_simplex_out,
+                           edge.mf_vert_out);
+
+            bitsetToCoord(bitset_coord, edge.hcoface_grid_coord);
+
+            edge.hcoface_label.reset();
+            edge.hcoface_label |= hcoface_label.to_ullong();
+
+            tau_in.fromBitset(bitset_simplex_in);
+            edge.hface_grid_coord_in = tau_in.grid_coord;
+
+            tau_out.fromBitset(bitset_simplex_out);
+            edge.hface_grid_coord_out = tau_out.grid_coord;
+
+            edge.simplex_vert_label_in[0] = 0;
+            edge.simplex_vert_label_out[0] = 0;
+            for (size_t i = 1; i < (KDIM + 1); ++i) {
+                edge.simplex_vert_label_in[i] = edge.simplex_vert_label_in[i - 1] | (1ULL << tau_in.e_idx[i - 1]);
+                edge.simplex_vert_label_out[i] = edge.simplex_vert_label_out[i - 1] | (1ULL << tau_out.e_idx[i - 1]);
+            }
+        }
 
         // adding to the vector of cofaces and taking the index.
         const size_t idx = edges.size();
@@ -129,7 +155,7 @@ int main(int argc, char *argv[]) {
         const P_MASK pdep_mask = pmask(fixed_coord);
         for (size_t i = 0; i < (1ULL << n_fixed_coord); ++i) {
             const size_t neighbor = pdep(i, pdep_mask);
-            std::array<size_t, NDIM> grid_coord_aux = edge.hcoface_grid_coord;
+            std::array<UINT_COORD, NDIM> grid_coord_aux = edge.hcoface_grid_coord;
             bool skip = false;
             for (size_t j = 0; j < NDIM; ++j) {
                 if (neighbor & (1ULL << j)) {
@@ -153,10 +179,11 @@ int main(int argc, char *argv[]) {
             if (skip) {
                 continue;
             }
-            size_t grid_coord_enm = coordToEnum(grid_coord_aux, DOMAIN_GRID_BASIS);
-            auto iter = hcubes.find(grid_coord_enm);
+            BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> bitset_coord_aux;
+            coordToBitset(grid_coord_aux, bitset_coord_aux);
+            auto iter = hcubes.find(bitset_coord_aux);
             if (iter == hcubes.end()) {
-                hcubes[grid_coord_enm] = { idx };
+                hcubes[bitset_coord_aux] = { idx };
             } else {
                 iter->second.push_back(idx);
             }
@@ -169,10 +196,10 @@ int main(int argc, char *argv[]) {
     // then I run the combinatorial skeleton in this other binary file to assemble the pol.
     HypercubeApprox approx;
     for (const auto &hcube : hcubes) {
-        const size_t g = hcube.first;
+        const BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> bitset_coord = hcube.first;
         const std::vector<size_t> &edges_idx = hcube.second;
-        std::array<size_t, NDIM> grid_coord{};
-        enumToCoord(g, DOMAIN_GRID_BASIS, grid_coord);
+        std::array<UINT_COORD, NDIM> grid_coord{};
+        bitsetToCoord(bitset_coord, grid_coord);
         approx.reset();
         // vertices on the faces of the hypercube.
         std::array<size_t, KDIM + 1> vert_label{};
@@ -246,7 +273,7 @@ int main(int argc, char *argv[]) {
         // saving to the output file.
         if (approx.vertex_labels.size() >= (MDIM + 1)) {
             ++n_saved_hypercubes;
-            writeOutputHypercube(g, approx, fout);
+            writeOutputHypercube(n_saved_hypercubes, bitset_coord, approx, fout);
         }
     }
 

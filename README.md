@@ -51,6 +51,8 @@ The available test cases are:
       KLEIN_5TO3,
       HYPERSHPERE_5TO1,
       CIRCLE_9TO8,
+      HYPERSHPERE_N_TO_K,
+      S1_K_TIMES,
   };
   ```
 

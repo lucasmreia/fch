@@ -13,21 +13,6 @@
 #include "../common/bmi2.h"
 #include "permutahedron.h"
 
-// constexpr bool checkVertexLabelsEnumSize() {
-//     // if size_t can't store the entire size of the integer, it throws an exception.
-//     size_t aux = std::numeric_limits<size_t>::max();
-//     aux /= (1ULL << NDIM);
-//     for (size_t i = 1; i <= NDIM; ++i) {
-//         if (aux < (1ULL << NDIM)) {
-//             return false;
-//         }
-//         aux /= (1ULL << NDIM);
-//     }
-//     return true;
-// }
-//
-// static_assert(checkVertexLabelsEnumSize(), "vertex label enum integer is too big");
-
 // a simplex can have up to (NDIM + 1) vertices, and each vertex has a label of NDIM bits.
 typedef std::bitset<NDIM *(NDIM + 1)> BitsetVertLabels;
 
@@ -52,12 +37,12 @@ typedef std::unordered_map<BitsetVertLabels, std::unordered_set<size_t>> EdgeMap
 typedef std::unordered_map<BitsetVertLabels, std::vector<size_t>> LabelMap;
 
 std::vector<Simplex> simplices;
-std::unordered_map<size_t, std::unordered_set<size_t>> hcubes;
+std::map<BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH>, std::unordered_set<size_t>> hcubes;
 
 void createCofacesFromFace(const SFace &face, const size_t idx_simplex) {
     // print_face(face);
     SCoface coface, coface_canonical;
-    size_t label_grid;
+    BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> bitset_grid_coord;
     coface.grid_coord = face.grid_coord;
     size_t pcount, idx = 0, part_a, part_b;
     P_MASK pdep_mask;
@@ -86,12 +71,12 @@ void createCofacesFromFace(const SFace &face, const size_t idx_simplex) {
                 }
                 //--
                 if (isSCofaceInsideGrid(coface_canonical)) {
-                    label_grid = coordToEnum(coface_canonical.grid_coord, DOMAIN_GRID_BASIS1);
-                    auto iter = hcubes.find(label_grid);
+                    coordToBitset(coface_canonical.grid_coord, bitset_grid_coord);
+                    auto iter = hcubes.find(bitset_grid_coord);
                     if (iter != hcubes.end()) {
                         iter->second.insert(idx_simplex);
                     } else {
-                        hcubes[label_grid] = { idx_simplex };
+                        hcubes[bitset_grid_coord] = { idx_simplex };
                     }
                 }
             }
@@ -101,7 +86,7 @@ void createCofacesFromFace(const SFace &face, const size_t idx_simplex) {
     }
 }
 
-void connectEdges(const std::array<size_t, NDIM> &grid_coord,
+void connectEdges(const std::array<UINT_COORD, NDIM> &grid_coord,
                   const std::vector<Simplex> &mf_vertices,
                   const std::vector<size_t> &v_idx,
                   EdgeMap &edges, LabelMap &labels) {
@@ -247,13 +232,13 @@ void skeleton(const size_t k_vert,
     }
 }
 
-void connectSimplicesOfGridCell(const size_t g_idx, const size_t &label_grid,
+void connectSimplicesOfGridCell(const size_t g_idx, const BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> &bitset_grid_coord,
                                 const std::unordered_set<size_t> &s_idx,
                                 const std::string &float_format,
                                 FILE *fout) {
     // position of the cube in the grid.
-    std::array<size_t, NDIM> grid{};
-    enumToCoord(label_grid, DOMAIN_GRID_BASIS1, grid);
+    std::array<UINT_COORD, NDIM> grid{};
+    bitsetToCoord(bitset_grid_coord, grid);
 
     // listing the vertices of the manifold.
     std::vector<Simplex> mfVertices;
@@ -261,6 +246,17 @@ void connectSimplicesOfGridCell(const size_t g_idx, const size_t &label_grid,
     for (size_t idx : s_idx) {
         mfVertices.push_back(simplices[idx]);
     }
+    // sorting the vertices.
+    stable_sort(mfVertices.begin(), mfVertices.end(),
+                [](const Simplex &s1, const Simplex &s2) {
+                    for (size_t i = 0; i < (KDIM + 1); ++i) {
+                        if (s1.vert_labels[i] != s2.vert_labels[i]) {
+                            return s1.vert_labels[i] < s2.vert_labels[i];
+                        }
+                    }
+                    return false;
+                });
+
     std::vector<bool> mfVertices_used(mfVertices.size(), false);
 
     // canonical basis in R^n.

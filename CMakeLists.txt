@@ -9,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
         message("RELEASE MODE: ENABLING ALL OPTIMIZATION FLAGS.")
         set(OPTIM_FLAGS
-                "-Ofast"
+                "-O3"
                 "-march=native"
                 "-mtune=native"
                 #"-mfpmath=sse"
@@ -48,6 +48,8 @@ set(COMMON_SRC
         common/test_cases/klein_5to3.h
         common/test_cases/hypersphere_5to1.h
         common/test_cases/circle_9to8.h
+        common/test_cases/hypersphere_n_to_k.h
+        common/test_cases/s1_k_times.h
 )
 
 
@@ -169,11 +171,13 @@ endif ()
 set(FCH_SRC
         fch/fch.h
         fch/fch.cpp
+        fch/pta_find_first_simplex.h
+        fch/pta_find_first_simplex.cpp
 )
 #---
 add_executable(fch
         ${COMMON_SRC}
-        ${GCCH_SRC}
+        ${PTA_SRC}
         ${FCH_SRC}
         fch/main_fch.cpp
 )
@@ -195,6 +199,7 @@ endif ()
 add_executable(fch_to_hypercubes
         ${COMMON_SRC}
         ${GCCH_SRC}
+        ${PTA_SRC}
         ${FCH_SRC}
         fch/main_fch_to_hypercubes.cpp
 )

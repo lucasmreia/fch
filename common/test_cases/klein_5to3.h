@@ -27,11 +27,11 @@ struct TestCaseImpl<TestCase::KLEIN_5TO3> {
         2 * M_PI
     };
     static constexpr std::array<size_t, NDIM> DOMAIN_DIV{
-        30,
-        30,
-        30,
-        30,
-        30,
+        20,
+        20,
+        20,
+        20,
+        20,
     };
 
     static constexpr std::array<double, NDIM> FIRST_POINT{

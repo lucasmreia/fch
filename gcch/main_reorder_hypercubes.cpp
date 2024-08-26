@@ -12,7 +12,7 @@
 #include "../common/definitions.h"
 #include "gch.h"
 
-std::map<size_t, HypercubeApprox> all_approx;
+std::map<BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH>, HypercubeApprox> all_approx;
 
 void readApproxOutput(const std::string &filename_in) {
     FILE *fin = fopen(filename_in.c_str(), "rb");
@@ -25,12 +25,12 @@ void readApproxOutput(const std::string &filename_in) {
     constexpr size_t EOF_FLAG = std::numeric_limits<size_t>::max();
 
     size_t g;
-    std::array<size_t, NDIM> grid_coord{};
+    BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> bitset_coord{};
     HypercubeApprox approx;
     size_t n_saved_hypercubes = 0;
 
     while (true) {
-        // reading the hypercube position.
+        // reading the hypercube number.
         fread(&g, sizeof(size_t), 1, fin);
 
         // checking if it is eof.
@@ -38,14 +38,13 @@ void readApproxOutput(const std::string &filename_in) {
             break;
         }
 
-        enumToCoord(g, DOMAIN_GRID_BASIS, grid_coord);
         ++n_saved_hypercubes;
 
-        // reading the other parameters of the hypercube.
-        readOutputHypercube(fin, approx);
+        // reading the parameters of the hypercube.
+        readOutputHypercube(fin, bitset_coord, approx);
 
         // inserting in the map.
-        all_approx.insert({ g, approx });
+        all_approx.insert({ bitset_coord, approx });
     }
 
     fclose(fin);
@@ -55,8 +54,9 @@ void saveApproxOutput(const std::string &filename_out) {
     FILE *fout = fopen(filename_out.c_str(), "wb");
 
     // writing all approx.
+    size_t count = 1;
     for (const auto &approx : all_approx) {
-        writeOutputHypercube(approx.first, approx.second, fout);
+        writeOutputHypercube(count++, approx.first, approx.second, fout);
     }
 
     // writing eof.

@@ -137,7 +137,8 @@ int main(int argc, char *argv[]) {
     constexpr size_t EOF_FLAG = std::numeric_limits<size_t>::max();
 
     size_t g;
-    std::array<size_t, NDIM> grid_coord{};
+    std::array<UINT_COORD, NDIM> grid_coord{};
+    BitLabel<DOMAIN_DIV_TOTAL_BIT_WIDTH> bitset_coord{};
     HypercubeApprox approx;
     size_t n_saved_hypercubes = 0;
     size_t n_read_hypercubes = 0;
@@ -150,7 +151,7 @@ int main(int argc, char *argv[]) {
     fprintf(fout, "\n\n");
 
     while (true) {
-        // reading the hypercube position.
+        // reading the hypercube number.
         fread(&g, sizeof(size_t), 1, fin);
 
         // checking if it is eof.
@@ -158,11 +159,11 @@ int main(int argc, char *argv[]) {
             break;
         }
 
-        enumToCoord(g, DOMAIN_GRID_BASIS, grid_coord);
         ++n_read_hypercubes;
 
-        // reading the other parameters of the hypercube.
-        readOutputHypercube(fin, approx);
+        // reading the parameters of the hypercube.
+        readOutputHypercube(fin, bitset_coord, approx);
+        bitsetToCoord(bitset_coord, grid_coord);
 
         // separating the connected components.
         const std::vector<HypercubeApprox> connected_components = separateConnectedComponents(approx);
@@ -182,7 +183,7 @@ int main(int argc, char *argv[]) {
         ++n_saved_hypercubes;
         fprintf(fout, "%3lu ", n_saved_hypercubes);
         for (int64_t i = 0; i < NDIM; ++i) {
-            fprintf(fout, "%3lu ", grid_coord[i]);
+            fprintf(fout, "%3lu ", static_cast<size_t>(grid_coord[i]));
         }
         fprintf(fout, "\n");
 
