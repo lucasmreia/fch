@@ -4,7 +4,7 @@ This repository contains the C++ implementation of the Fast Continuation Hypercu
 
 This algorithm creates a piecewise linear approximation of a manifold of dimension $(n-k)$ which is implicitly defined by the function $F(\mathbf{x})=\mathbf{0}$, where $F:\mathbb{R}^n\to\mathbb{R}^k$.
 
-For comparison, we also provide implementations for the permutahedron-based tracing algorithm of Boissonnat et al. [1], and the Generalized Combinatorial Continuation Hypercubes [2].
+For comparison, we also provide implementations for the permutahedron-based tracing algorithm of Boissonnat et al.[1], and the Generalized Combinatorial Continuation Hypercubes[2].
 
 https://github.com/user-attachments/assets/ab187621-dc49-452d-ad52-46267e2ed2b4
 
@@ -128,6 +128,10 @@ The pipeline was split into multiple executables for convenience. You can check 
   ./build/reorder_hypercubes -i out/fch_hypercubes.bin -o out/fch_hypercubes_reordered.bin
   ./build/skeleton_hypercubes -i out/fch_hypercubes_reordered.bin -o out/fch.pol -ff 15.6
   ```
+
+## Visualization
+
+The generated .pol files can be visualized with our *N-Dimensional Renderer*: [NDRenderer](https://github.com/lucasmreia/NDRenderer).
 
 ## References
 
